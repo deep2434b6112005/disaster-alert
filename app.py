@@ -16,7 +16,7 @@ feature_columns = joblib.load("flood_feature_columns.pkl")
 # =========================
 # APIS
 # =========================
-REVERSE_GEOCODE_API = "https://geocoding-api.open-meteo.com/v1/reverse"
+REVERSE_GEOCODE_API = "https://geocoding-api.open-meteo.com/v1/reverse-geocode"
 FORECAST_API = "https://api.open-meteo.com/v1/forecast"
 
 
