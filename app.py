@@ -1,35 +1,8 @@
 from flask import Flask, request, jsonify
-import random
 from datetime import datetime, timedelta
+import os
 
 app = Flask(__name__)
-
-def make_confidence():
-    return {
-        "Cyclone": round(random.uniform(10, 95), 1),
-        "Flood": round(random.uniform(10, 95), 1),
-        "Heatwave": round(random.uniform(10, 95), 1),
-        "Landslide": round(random.uniform(10, 95), 1),
-    }
-
-def confidence_to_risk(val):
-    if val >= 65:
-        return "High"
-    elif val >= 40:
-        return "Medium"
-    else:
-        return "Low"
-
-def confidence_to_prediction(val):
-    return "Risk" if val >= 50 else "No Risk"
-
-def make_alert_message(overall, disaster):
-    if overall == "High":
-        return f"High risk of {disaster} detected. Take immediate precautions."
-    elif overall == "Medium":
-        return f"Moderate {disaster} risk in your area. Stay alert."
-    else:
-        return "Conditions are currently stable. Stay prepared."
 
 @app.route("/", methods=["GET"])
 def home():
@@ -51,46 +24,81 @@ def predict():
     longitude = data.get("longitude")
 
     if latitude is None or longitude is None:
-        return jsonify({"error": "latitude and longitude are required"}), 400
+        return jsonify({
+            "error": "latitude and longitude are required"
+        }), 400
 
-    confidence = make_confidence()
+    try:
+        latitude = float(latitude)
+        longitude = float(longitude)
+    except (TypeError, ValueError):
+        return jsonify({
+            "error": "latitude and longitude must be numeric"
+        }), 400
 
-    risk_levels = {k: confidence_to_risk(v) for k, v in confidence.items()}
-    predictions = {k: confidence_to_prediction(v) for k, v in confidence.items()}
+    confidence = {
+        "Cyclone": 35.4,
+        "Flood": 78.6,
+        "Heatwave": 20.2,
+        "Landslide": 44.8
+    }
 
-    max_disaster = max(confidence, key=confidence.get)
-    max_conf = confidence[max_disaster]
-    overall = confidence_to_risk(max_conf)
+    predictions = {
+        "Cyclone": "No Risk",
+        "Flood": "Risk",
+        "Heatwave": "No Risk",
+        "Landslide": "No Risk"
+    }
+
+    hazard_risk_levels = {
+        "Cyclone": "Low",
+        "Flood": "High",
+        "Heatwave": "Low",
+        "Landslide": "Medium"
+    }
+
+    max_risk_disaster = "Flood"
+    max_risk_confidence = 78.6
+    overall_risk_level = "High"
 
     future_alerts = []
     for i in range(1, 8):
-        fc = make_confidence()
-        fr = {k: confidence_to_risk(v) for k, v in fc.items()}
-        fp = {k: confidence_to_prediction(v) for k, v in fc.items()}
-        fmax_d = max(fc, key=fc.get)
-        fmax_c = fc[fmax_d]
-        foverall = confidence_to_risk(fmax_c)
         date_str = (datetime.now() + timedelta(days=i)).strftime("%Y-%m-%d")
 
         future_alerts.append({
-            "alert_message": make_alert_message(foverall, fmax_d),
-            "confidence": fc,
+            "alert_message": "Moderate Flood risk in your area. Stay alert.",
+            "confidence": {
+                "Cyclone": 32.5,
+                "Flood": 74.2,
+                "Heatwave": 28.1,
+                "Landslide": 41.7
+            },
             "date": date_str,
             "days_remaining": i,
-            "hazard_risk_levels": fr,
-            "max_risk_confidence": fmax_c,
-            "max_risk_disaster": fmax_d,
-            "overall_risk_level": foverall,
-            "predictions": fp,
+            "hazard_risk_levels": {
+                "Cyclone": "Low",
+                "Flood": "High",
+                "Heatwave": "Low",
+                "Landslide": "Medium"
+            },
+            "max_risk_confidence": 74.2,
+            "max_risk_disaster": "Flood",
+            "overall_risk_level": "High",
+            "predictions": {
+                "Cyclone": "No Risk",
+                "Flood": "Risk",
+                "Heatwave": "No Risk",
+                "Landslide": "No Risk"
+            }
         })
 
     response = {
         "confidence": confidence,
         "future_alerts": future_alerts,
-        "hazard_risk_levels": risk_levels,
-        "max_risk_confidence": max_conf,
-        "max_risk_disaster": max_disaster,
-        "overall_risk_level": overall,
+        "hazard_risk_levels": hazard_risk_levels,
+        "max_risk_confidence": max_risk_confidence,
+        "max_risk_disaster": max_risk_disaster,
+        "overall_risk_level": overall_risk_level,
         "predictions": predictions,
         "resolved_location": {
             "name": "Demo Location",
@@ -98,11 +106,12 @@ def predict():
             "admin1": "Demo State",
             "country": "India",
             "latitude": latitude,
-            "longitude": longitude,
+            "longitude": longitude
         }
     }
 
     return jsonify(response), 200
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
