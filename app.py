@@ -16,62 +16,45 @@ feature_columns = joblib.load("flood_feature_columns.pkl")
 # =========================
 # APIS
 # =========================
-GEOCODING_API = "https://geocoding-api.open-meteo.com/v1/search"
+REVERSE_GEOCODE_API = "https://geocoding-api.open-meteo.com/v1/reverse"
 FORECAST_API = "https://api.open-meteo.com/v1/forecast"
 
 
 # =========================
-# 1) GEOCODING HELPERS
+# 1) LOCATION HELPERS
 # =========================
-def try_geocode(place_query):
+def get_location_from_coordinates(lat, lon):
     params = {
-        "name": place_query,
-        "count": 1,
+        "latitude": lat,
+        "longitude": lon,
         "language": "en",
-        "format": "json",
-        "countryCode": "IN"
+        "format": "json"
     }
 
-    response = requests.get(GEOCODING_API, params=params, timeout=10)
+    response = requests.get(REVERSE_GEOCODE_API, params=params, timeout=10)
     response.raise_for_status()
     data = response.json()
 
     results = data.get("results")
     if not results:
-        return None
+        return {
+            "name": "Selected Location",
+            "latitude": lat,
+            "longitude": lon,
+            "country": "India",
+            "admin1": "",
+            "admin2": ""
+        }
 
     place = results[0]
     return {
-        "name": place.get("name"),
-        "latitude": place.get("latitude"),
-        "longitude": place.get("longitude"),
-        "country": place.get("country"),
-        "admin1": place.get("admin1"),
-        "admin2": place.get("admin2")
+        "name": place.get("name", "Selected Location"),
+        "latitude": lat,
+        "longitude": lon,
+        "country": place.get("country", "India"),
+        "admin1": place.get("admin1", ""),
+        "admin2": place.get("admin2", "")
     }
-
-
-def get_coordinates(state=None, district=None, area=None):
-    queries = []
-
-    if area and district and state:
-        queries.append(f"{area}, {district}, {state}")
-    if district and state:
-        queries.append(f"{district}, {state}")
-    if area and state:
-        queries.append(f"{area}, {state}")
-    if district:
-        queries.append(district)
-    if state:
-        queries.append(state)
-
-    for query in queries:
-        result = try_geocode(query)
-        if result:
-            result["matched_query"] = query
-            return result
-
-    return None
 
 
 # =========================
@@ -170,7 +153,7 @@ def get_selected_day_weather(weather_data, selected_date):
 def get_land_cover_simple(location_name):
     name = location_name.lower()
 
-    major_urban = ["chennai", "mumbai", "delhi", "bangalore", "kolkata", "hyderabad", "pune"]
+    major_urban = ["chennai", "mumbai", "delhi", "bangalore", "kolkata", "hyderabad", "pune", "patna"]
     coastal_water = ["chennai", "mumbai", "visakhapatnam", "kochi", "nagapattinam", "cuddalore", "puri"]
     forest_places = ["nilgiris", "ooty", "kodaikanal", "wayanad", "munnar", "coorg", "shimla"]
 
@@ -202,8 +185,8 @@ def get_land_cover_simple(location_name):
 def get_population_estimate(location_name):
     name = location_name.lower()
 
-    high_density = ["chennai", "mumbai", "delhi", "bangalore", "kolkata", "hyderabad"]
-    medium_density = ["coimbatore", "madurai", "trichy", "salem", "tiruppur", "pune"]
+    high_density = ["chennai", "mumbai", "delhi", "bangalore", "kolkata", "hyderabad", "patna"]
+    medium_density = ["coimbatore", "madurai", "trichy", "salem", "tiruppur", "pune", "gaya", "muzaffarpur"]
 
     if any(x in name for x in high_density):
         return 12000
@@ -233,7 +216,7 @@ def get_season_flags_from_date(date_str):
 # =========================
 def get_default_feature_values(location, weather, selected_date):
     elevation_val = weather.get("elevation", 0)
-    location_name = location.get("matched_query", location.get("name", ""))
+    location_name = location.get("name", "Selected Location")
     day_weather = get_selected_day_weather(weather, selected_date)
 
     defaults = {
@@ -287,11 +270,11 @@ def prepare_model_input(location, weather, selected_date):
 # =========================
 # 9) RISK LEVEL HELPER
 # =========================
-def get_risk_level(prob_percent):
-    if prob_percent >= 70:
+def get_risk_level(score):
+    if score >= 70:
         return "High"
-    elif prob_percent >= 45:
-        return "Moderate"
+    elif score >= 45:
+        return "Medium"
     else:
         return "Low"
 
@@ -319,7 +302,6 @@ def detect_cyclone_logic(features, location_name=""):
 
     if coastal:
         score += 15
-
     if cyclone_season == 1:
         score += 10
 
@@ -341,7 +323,7 @@ def detect_cyclone_logic(features, location_name=""):
         score += 10
 
     prediction = "Risk" if score >= 50 else "No Risk"
-    return prediction, score, get_risk_level(score)
+    return prediction, float(score), get_risk_level(score)
 
 
 def detect_heatwave_logic(features):
@@ -367,7 +349,7 @@ def detect_heatwave_logic(features):
         score += 20
 
     prediction = "Risk" if score >= 45 else "No Risk"
-    return prediction, score, get_risk_level(score)
+    return prediction, float(score), get_risk_level(score)
 
 
 def detect_landslide_logic(features, location_name=""):
@@ -400,7 +382,7 @@ def detect_landslide_logic(features, location_name=""):
         score += 15
 
     prediction = "Risk" if score >= 45 else "No Risk"
-    return prediction, score, get_risk_level(score)
+    return prediction, float(score), get_risk_level(score)
 
 
 # =========================
@@ -415,12 +397,20 @@ def apply_flood_sanity_rule(flood_pred, flood_prob, used_features):
         flood_pred = 0
         flood_prob = min(float(flood_prob), 25.0)
 
-    return flood_pred, round(float(flood_prob), 2)
+    return flood_pred, round(float(flood_prob), 1)
 
 
 # =========================
 # 12) 7-DAY ALERTS
 # =========================
+def make_alert_message(overall, disaster):
+    if overall == "High":
+        return f"High risk of {disaster} detected. Take immediate precautions."
+    elif overall == "Medium":
+        return f"Moderate {disaster} risk in this area. Stay alert."
+    return "Conditions are currently stable. Stay prepared."
+
+
 def predict_next_7_days(location, weather_data):
     daily = weather_data.get("daily", {})
     dates = daily.get("time", [])
@@ -432,35 +422,31 @@ def predict_next_7_days(location, weather_data):
         model_input, used_features = prepare_model_input(location, weather_data, date)
 
         flood_pred = int(model.predict(model_input)[0])
-        flood_prob = round(float(model.predict_proba(model_input)[0][1]) * 100, 2)
-
+        flood_prob = round(float(model.predict_proba(model_input)[0][1]) * 100, 1)
         flood_pred, flood_prob = apply_flood_sanity_rule(flood_pred, flood_prob, used_features)
 
-        flood_prediction = "Risk" if flood_pred == 1 else "No Risk"
-        flood_risk = get_risk_level(flood_prob)
-
-        location_name = location.get("matched_query", location.get("name", ""))
+        location_name = location.get("name", "Selected Location")
         cyclone_prediction, cyclone_score, cyclone_risk = detect_cyclone_logic(used_features, location_name)
         heatwave_prediction, heatwave_score, heatwave_risk = detect_heatwave_logic(used_features)
         landslide_prediction, landslide_score, landslide_risk = detect_landslide_logic(used_features, location_name)
 
         day_predictions = {
-            "Flood": flood_prediction,
             "Cyclone": cyclone_prediction,
+            "Flood": "Risk" if flood_pred == 1 else "No Risk",
             "Heatwave": heatwave_prediction,
             "Landslide": landslide_prediction
         }
 
         day_confidence = {
-            "Flood": flood_prob,
             "Cyclone": cyclone_score,
+            "Flood": flood_prob,
             "Heatwave": heatwave_score,
             "Landslide": landslide_score
         }
 
         day_risk_levels = {
-            "Flood": flood_risk,
             "Cyclone": cyclone_risk,
+            "Flood": get_risk_level(flood_prob),
             "Heatwave": heatwave_risk,
             "Landslide": landslide_risk
         }
@@ -472,88 +458,66 @@ def predict_next_7_days(location, weather_data):
         event_date = datetime.strptime(date, "%Y-%m-%d").date()
         days_remaining = (event_date - today).days
 
-        if max_risk_confidence >= 45 and days_remaining >= 0:
-            if days_remaining == 0:
-                alert_message = f"{max_risk_disaster} risk expected today"
-            elif days_remaining == 1:
-                alert_message = f"{max_risk_disaster} risk expected tomorrow"
-            else:
-                alert_message = f"{max_risk_disaster} risk expected in {days_remaining} days"
-
+        if days_remaining >= 0 and max_risk_confidence >= 45:
             alerts.append({
+                "alert_message": make_alert_message(overall_risk_level, max_risk_disaster),
+                "confidence": day_confidence,
                 "date": date,
                 "days_remaining": days_remaining,
-                "predictions": day_predictions,
-                "confidence": day_confidence,
                 "hazard_risk_levels": day_risk_levels,
-                "max_risk_disaster": max_risk_disaster,
                 "max_risk_confidence": max_risk_confidence,
+                "max_risk_disaster": max_risk_disaster,
                 "overall_risk_level": overall_risk_level,
-                "alert_message": alert_message
+                "predictions": day_predictions
             })
 
     return alerts
 
 
 # =========================
-# 13) HOME
+# 13) ROOT
 # =========================
 @app.route("/", methods=["GET"])
 def home():
     return jsonify({
-        "message": "Multi-Hazard Prediction API is running",
-        "sample_route": "/predict?state=Tamil Nadu&district=Chennai&area=Anna Nagar&date=2026-04-05",
-        "hazards": ["Flood (ML)", "Cyclone (Logic)", "Landslide (Logic)", "Heatwave (Logic)"],
-        "extra_feature": "Auto 7-Day Alert System enabled"
+        "status": "ok",
+        "message": "HazardNet India API is running",
+        "predict_method": "POST",
+        "sample_body": {
+            "latitude": 13.0827,
+            "longitude": 80.2707
+        }
     })
 
 
 # =========================
-# 14) WEATHER ENDPOINT
+# 14) WEATHER ENDPOINT (OPTIONAL GET)
 # =========================
 @app.route("/weather", methods=["GET"])
 def weather():
-    state = request.args.get("state")
-    district = request.args.get("district")
-    area = request.args.get("area")
+    lat = request.args.get("latitude")
+    lon = request.args.get("longitude")
     date = request.args.get("date")
 
     if not date:
         date = datetime.now().strftime("%Y-%m-%d")
 
+    if lat is None or lon is None:
+        return jsonify({"error": "latitude and longitude are required"}), 400
+
     try:
+        lat = float(lat)
+        lon = float(lon)
         datetime.strptime(date, "%Y-%m-%d")
     except ValueError:
-        return jsonify({"error": "Date must be in YYYY-MM-DD format"}), 400
-
-    if not any([state, district, area]):
-        return jsonify({"error": "Please provide at least state, district, or area"}), 400
+        return jsonify({"error": "Invalid latitude, longitude, or date"}), 400
 
     try:
-        location = get_coordinates(state=state, district=district, area=area)
-
-        if not location:
-            return jsonify({
-                "error": "Location not found",
-                "tried": [
-                    f"{area}, {district}, {state}" if area and district and state else None,
-                    f"{district}, {state}" if district and state else None,
-                    f"{area}, {state}" if area and state else None,
-                    district if district else None,
-                    state if state else None
-                ]
-            }), 404
-
-        weather_data = get_weather(location["latitude"], location["longitude"])
+        location = get_location_from_coordinates(lat, lon)
+        weather_data = get_weather(lat, lon)
         selected_day = get_selected_day_weather(weather_data, date)
 
         return jsonify({
-            "requested_location": {
-                "state": state,
-                "district": district,
-                "area": area,
-                "date": date
-            },
             "resolved_location": location,
             "selected_day_weather": selected_day,
             "raw_weather": weather_data
@@ -569,100 +533,93 @@ def weather():
 
 
 # =========================
-# 15) PREDICT ENDPOINT
+# 15) PREDICT ENDPOINT (POST)
 # =========================
-@app.route("/predict", methods=["GET"])
+@app.route("/predict", methods=["POST"])
 def predict():
-    state = request.args.get("state")
-    district = request.args.get("district")
-    area = request.args.get("area")
-    date = request.args.get("date")
+    data = request.get_json(silent=True) or {}
+
+    latitude = data.get("latitude")
+    longitude = data.get("longitude")
+    date = data.get("date")
 
     if not date:
         date = datetime.now().strftime("%Y-%m-%d")
 
+    if latitude is None or longitude is None:
+        return jsonify({
+            "error": "latitude and longitude are required"
+        }), 400
+
     try:
+        latitude = float(latitude)
+        longitude = float(longitude)
         datetime.strptime(date, "%Y-%m-%d")
-    except ValueError:
-        return jsonify({"error": "Date must be in YYYY-MM-DD format"}), 400
-
-    if not any([state, district, area]):
-        return jsonify({"error": "Please provide at least state, district, or area"}), 400
+    except (TypeError, ValueError):
+        return jsonify({
+            "error": "latitude and longitude must be numeric and date must be YYYY-MM-DD"
+        }), 400
 
     try:
-        location = get_coordinates(state=state, district=district, area=area)
-
-        if not location:
-            return jsonify({
-                "error": "Location not found",
-                "tried": [
-                    f"{area}, {district}, {state}" if area and district and state else None,
-                    f"{district}, {state}" if district and state else None,
-                    f"{area}, {state}" if area and state else None,
-                    district if district else None,
-                    state if state else None
-                ]
-            }), 404
-
-        weather_data = get_weather(location["latitude"], location["longitude"])
+        location = get_location_from_coordinates(latitude, longitude)
+        weather_data = get_weather(latitude, longitude)
         model_input, used_features = prepare_model_input(location, weather_data, date)
 
         flood_pred = int(model.predict(model_input)[0])
-        flood_prob = round(float(model.predict_proba(model_input)[0][1]) * 100, 2)
-
+        flood_prob = round(float(model.predict_proba(model_input)[0][1]) * 100, 1)
         flood_pred, flood_prob = apply_flood_sanity_rule(flood_pred, flood_prob, used_features)
 
-        location_name = location.get("matched_query", location.get("name", ""))
+        location_name = location.get("name", "Selected Location")
         cyclone_prediction, cyclone_score, cyclone_risk = detect_cyclone_logic(used_features, location_name)
         heatwave_prediction, heatwave_score, heatwave_risk = detect_heatwave_logic(used_features)
         landslide_prediction, landslide_score, landslide_risk = detect_landslide_logic(used_features, location_name)
 
-        result_predictions = {
-            "Flood": "Risk" if flood_pred == 1 else "No Risk",
+        predictions = {
             "Cyclone": cyclone_prediction,
+            "Flood": "Risk" if flood_pred == 1 else "No Risk",
             "Heatwave": heatwave_prediction,
             "Landslide": landslide_prediction
         }
 
-        result_confidence = {
-            "Flood": flood_prob,
+        confidence = {
             "Cyclone": cyclone_score,
+            "Flood": flood_prob,
             "Heatwave": heatwave_score,
             "Landslide": landslide_score
         }
 
-        result_risk_levels = {
-            "Flood": get_risk_level(flood_prob),
+        hazard_risk_levels = {
             "Cyclone": cyclone_risk,
+            "Flood": get_risk_level(flood_prob),
             "Heatwave": heatwave_risk,
             "Landslide": landslide_risk
         }
 
-        max_risk_disaster = max(result_confidence, key=result_confidence.get)
-        max_risk_value = result_confidence[max_risk_disaster]
-        overall_risk_level = get_risk_level(max_risk_value)
+        max_risk_disaster = max(confidence, key=confidence.get)
+        max_risk_confidence = confidence[max_risk_disaster]
+        overall_risk_level = get_risk_level(max_risk_confidence)
 
         future_alerts = predict_next_7_days(location, weather_data)
 
-        result = {
-            "requested_location": {
-                "state": state,
-                "district": district,
-                "area": area,
-                "date": date
-            },
-            "resolved_location": location,
-            "predictions": result_predictions,
-            "confidence": result_confidence,
-            "hazard_risk_levels": result_risk_levels,
-            "max_risk_disaster": max_risk_disaster,
-            "max_risk_confidence": max_risk_value,
-            "overall_risk_level": overall_risk_level,
+        response = {
+            "confidence": confidence,
             "future_alerts": future_alerts,
-            "used_features": used_features
+            "hazard_risk_levels": hazard_risk_levels,
+            "max_risk_confidence": max_risk_confidence,
+            "max_risk_disaster": max_risk_disaster,
+            "overall_risk_level": overall_risk_level,
+            "predictions": predictions,
+            "resolved_location": {
+                "name": location.get("name", "Selected Location"),
+                "admin2": location.get("admin2", ""),
+                "admin1": location.get("admin1", ""),
+                "country": location.get("country", "India"),
+                "latitude": latitude,
+                "longitude": longitude
+            }
         }
 
-        return jsonify(result)
+        return jsonify(response), 200
 
     except requests.exceptions.HTTPError as e:
         return jsonify({
