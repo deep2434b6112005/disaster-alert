@@ -16,7 +16,7 @@ feature_columns = joblib.load("flood_feature_columns.pkl")
 # =========================
 # APIS
 # =========================
-REVERSE_GEOCODE_API = "https://geocoding-api.open-meteo.com/v1/reverse-geocode"
+REVERSE_GEOCODE_API = "https://nominatim.openstreetmap.org/reverse"
 FORECAST_API = "https://api.open-meteo.com/v1/forecast"
 
 
@@ -25,18 +25,58 @@ FORECAST_API = "https://api.open-meteo.com/v1/forecast"
 # =========================
 def get_location_from_coordinates(lat, lon):
     params = {
-        "latitude": lat,
-        "longitude": lon,
-        "language": "en",
-        "format": "json"
+        "lat": lat,
+        "lon": lon,
+        "format": "jsonv2",
+        "accept-language": "en"
     }
 
-    response = requests.get(REVERSE_GEOCODE_API, params=params, timeout=10)
-    response.raise_for_status()
-    data = response.json()
+    headers = {
+        "User-Agent": "hazardnet-india/1.0"
+    }
 
-    results = data.get("results")
-    if not results:
+    try:
+        response = requests.get(
+            REVERSE_GEOCODE_API,
+            params=params,
+            headers=headers,
+            timeout=10
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        address = data.get("address", {})
+
+        name = (
+            address.get("suburb")
+            or address.get("city_district")
+            or address.get("city")
+            or address.get("town")
+            or address.get("village")
+            or data.get("name")
+            or "Selected Location"
+        )
+
+        admin2 = (
+            address.get("city")
+            or address.get("county")
+            or address.get("state_district")
+            or ""
+        )
+
+        admin1 = address.get("state", "")
+        country = address.get("country", "India")
+
+        return {
+            "name": name,
+            "latitude": lat,
+            "longitude": lon,
+            "country": country,
+            "admin1": admin1,
+            "admin2": admin2
+        }
+
+    except Exception:
         return {
             "name": "Selected Location",
             "latitude": lat,
@@ -45,16 +85,6 @@ def get_location_from_coordinates(lat, lon):
             "admin1": "",
             "admin2": ""
         }
-
-    place = results[0]
-    return {
-        "name": place.get("name", "Selected Location"),
-        "latitude": lat,
-        "longitude": lon,
-        "country": place.get("country", "India"),
-        "admin1": place.get("admin1", ""),
-        "admin2": place.get("admin2", "")
-    }
 
 
 # =========================
@@ -153,9 +183,18 @@ def get_selected_day_weather(weather_data, selected_date):
 def get_land_cover_simple(location_name):
     name = location_name.lower()
 
-    major_urban = ["chennai", "mumbai", "delhi", "bangalore", "kolkata", "hyderabad", "pune", "patna"]
-    coastal_water = ["chennai", "mumbai", "visakhapatnam", "kochi", "nagapattinam", "cuddalore", "puri"]
-    forest_places = ["nilgiris", "ooty", "kodaikanal", "wayanad", "munnar", "coorg", "shimla"]
+    major_urban = [
+        "chennai", "mumbai", "delhi", "bangalore", "kolkata",
+        "hyderabad", "pune", "patna", "new delhi"
+    ]
+    coastal_water = [
+        "chennai", "mumbai", "visakhapatnam", "kochi",
+        "nagapattinam", "cuddalore", "puri"
+    ]
+    forest_places = [
+        "nilgiris", "ooty", "kodaikanal", "wayanad",
+        "munnar", "coorg", "shimla"
+    ]
 
     land_cover = {
         "Land Cover_Agricultural": 0,
@@ -185,8 +224,14 @@ def get_land_cover_simple(location_name):
 def get_population_estimate(location_name):
     name = location_name.lower()
 
-    high_density = ["chennai", "mumbai", "delhi", "bangalore", "kolkata", "hyderabad", "patna"]
-    medium_density = ["coimbatore", "madurai", "trichy", "salem", "tiruppur", "pune", "gaya", "muzaffarpur"]
+    high_density = [
+        "chennai", "mumbai", "delhi", "new delhi",
+        "bangalore", "kolkata", "hyderabad", "patna"
+    ]
+    medium_density = [
+        "coimbatore", "madurai", "trichy", "salem",
+        "tiruppur", "pune", "gaya", "muzaffarpur"
+    ]
 
     if any(x in name for x in high_density):
         return 12000
@@ -491,7 +536,7 @@ def home():
 
 
 # =========================
-# 14) WEATHER ENDPOINT (OPTIONAL GET)
+# 14) WEATHER ENDPOINT
 # =========================
 @app.route("/weather", methods=["GET"])
 def weather():
@@ -533,7 +578,7 @@ def weather():
 
 
 # =========================
-# 15) PREDICT ENDPOINT (POST)
+# 15) PREDICT ENDPOINT
 # =========================
 @app.route("/predict", methods=["POST"])
 def predict():
