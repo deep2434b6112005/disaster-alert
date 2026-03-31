@@ -608,6 +608,7 @@ def predict():
     try:
         location = get_location_from_coordinates(latitude, longitude)
         weather_data = get_weather(latitude, longitude)
+        selected_day_weather = get_selected_day_weather(weather_data, date)
         model_input, used_features = prepare_model_input(location, weather_data, date)
 
         flood_pred = int(model.predict(model_input)[0])
@@ -661,7 +662,8 @@ def predict():
                 "country": location.get("country", "India"),
                 "latitude": latitude,
                 "longitude": longitude
-            }
+            },
+            "selected_day_weather": selected_day_weather
         }
 
         return jsonify(response), 200
